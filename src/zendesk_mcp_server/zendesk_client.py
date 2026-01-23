@@ -282,3 +282,180 @@ class ZendeskClient:
             }
         except Exception as e:
             raise Exception(f"Failed to update ticket {ticket_id}: {str(e)}")
+
+    def search_organizations(self, name: str) -> List[Dict[str, Any]]:
+        """
+        Search for organizations by name using direct REST API.
+
+        Args:
+            name: Organization name to search for
+
+        Returns:
+            List of matching organizations with id, name, domain_names
+        """
+        try:
+            encoded_name = urllib.parse.quote(name)
+            url = f"{self.base_url}/organizations/search.json?name={encoded_name}"
+
+            req = urllib.request.Request(url)
+            req.add_header('Authorization', self.auth_header)
+            req.add_header('Content-Type', 'application/json')
+
+            with urllib.request.urlopen(req) as response:
+                data = json.loads(response.read().decode())
+
+            organizations = data.get('organizations', [])
+            return [{
+                'id': org.get('id'),
+                'name': org.get('name'),
+                'domain_names': org.get('domain_names', [])
+            } for org in organizations]
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else "No response body"
+            raise Exception(f"Failed to search organizations: HTTP {e.code} - {e.reason}. {error_body}")
+        except Exception as e:
+            raise Exception(f"Failed to search organizations: {str(e)}")
+
+    def get_organization(self, organization_id: int) -> Dict[str, Any]:
+        """
+        Get a single organization by ID using Zenpy.
+
+        Args:
+            organization_id: The organization ID
+
+        Returns:
+            Organization details including id, name, domain_names, created_at, updated_at
+        """
+        try:
+            org = self.client.organizations(id=organization_id)
+            return {
+                'id': org.id,
+                'name': org.name,
+                'domain_names': list(org.domain_names) if org.domain_names else [],
+                'created_at': str(org.created_at),
+                'updated_at': str(org.updated_at)
+            }
+        except Exception as e:
+            raise Exception(f"Failed to get organization {organization_id}: {str(e)}")
+
+    def get_all_organizations(self) -> List[Dict[str, Any]]:
+        """
+        Get all organizations using Zenpy iterator.
+
+        Returns:
+            List of all organizations with basic fields
+        """
+        try:
+            organizations = self.client.organizations()
+            return [{
+                'id': org.id,
+                'name': org.name,
+                'domain_names': list(org.domain_names) if org.domain_names else [],
+                'created_at': str(org.created_at),
+                'updated_at': str(org.updated_at)
+            } for org in organizations]
+        except Exception as e:
+            raise Exception(f"Failed to get all organizations: {str(e)}")
+
+    def _build_search_query(
+        self,
+        organization_name: str | None = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
+        status: str | None = None
+    ) -> str:
+        """
+        Build a Zendesk search query string.
+
+        Args:
+            organization_name: Filter by organization name
+            created_after: Filter tickets created after this date (YYYY-MM-DD)
+            created_before: Filter tickets created before this date (YYYY-MM-DD)
+            status: Filter by ticket status
+
+        Returns:
+            Zendesk query string
+        """
+        query_parts = ["type:ticket"]
+        if organization_name:
+            query_parts.append(f'organization:"{organization_name}"')
+        if created_after:
+            query_parts.append(f"created>{created_after}")
+        if created_before:
+            query_parts.append(f"created<{created_before}")
+        if status:
+            query_parts.append(f"status:{status}")
+        return " ".join(query_parts)
+
+    def search_tickets(
+        self,
+        organization_name: str | None = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
+        status: str | None = None,
+        page: int = 1,
+        per_page: int = 25
+    ) -> Dict[str, Any]:
+        """
+        Search for tickets with various filters using Zenpy search.
+
+        Args:
+            organization_name: Filter by organization name
+            created_after: Filter tickets created after this date (YYYY-MM-DD)
+            created_before: Filter tickets created before this date (YYYY-MM-DD)
+            status: Filter by ticket status (new, open, pending, on-hold, solved, closed)
+            page: Page number (1-based)
+            per_page: Number of tickets per page (max 100)
+
+        Returns:
+            Dict containing tickets and pagination info (same structure as get_tickets)
+        """
+        try:
+            per_page = min(per_page, 100)
+            query = self._build_search_query(
+                organization_name=organization_name,
+                created_after=created_after,
+                created_before=created_before,
+                status=status
+            )
+
+            # Zenpy search returns a generator, we need to handle pagination manually
+            search_results = self.client.search(query, type='ticket')
+
+            # Convert to list and apply pagination
+            all_tickets = list(search_results)
+            total_count = len(all_tickets)
+
+            # Calculate pagination
+            start_idx = (page - 1) * per_page
+            end_idx = start_idx + per_page
+            page_tickets = all_tickets[start_idx:end_idx]
+
+            ticket_list = [{
+                'id': ticket.id,
+                'subject': ticket.subject,
+                'status': ticket.status,
+                'priority': ticket.priority,
+                'description': ticket.description,
+                'created_at': str(ticket.created_at),
+                'updated_at': str(ticket.updated_at),
+                'requester_id': ticket.requester_id,
+                'assignee_id': ticket.assignee_id,
+                'organization_id': ticket.organization_id
+            } for ticket in page_tickets]
+
+            has_more = end_idx < total_count
+
+            return {
+                'tickets': ticket_list,
+                'page': page,
+                'per_page': per_page,
+                'count': len(ticket_list),
+                'total_count': total_count,
+                'query': query,
+                'has_more': has_more,
+                'next_page': page + 1 if has_more else None,
+                'previous_page': page - 1 if page > 1 else None
+            }
+        except Exception as e:
+            raise Exception(f"Failed to search tickets: {str(e)}")
