@@ -13,6 +13,29 @@ This server provides a comprehensive integration with Zendesk. It offers:
 
 ![demo](https://res.cloudinary.com/leecy-me/image/upload/v1736410626/open/zendesk_yunczu.gif)
 
+## Switching from the Original Repository
+
+If you previously cloned the original repository:
+
+```bash
+git clone https://github.com/reminia/zendesk-mcp-server.git
+```
+
+You can switch to this fork by updating your git remote:
+
+```bash
+cd zendesk-mcp-server
+git remote set-url origin https://github.com/willisterman/zendesk-mcp-server.git
+git fetch origin
+git pull origin main
+```
+
+Alternatively, for a fresh clone of this fork:
+
+```bash
+git clone https://github.com/willisterman/zendesk-mcp-server.git
+```
+
 ## Setup
 
 - build: `uv venv && uv pip install -e .` or `uv build` in short.
@@ -82,7 +105,9 @@ Adjust the paths to match your environment. After saving the file, restart Claud
 
 ## Resources
 
-- zendesk://knowledge-base, get access to the whole help center articles.
+- `zendesk://knowledge-base` - Access to Help Center articles (cached 1 hour)
+- `zendesk://organizations` - List of all organizations (cached 3 days)
+- `zendesk://views` - List of all active views (cached 3 days)
 
 ## Prompts
 
@@ -160,3 +185,57 @@ Update fields on an existing Zendesk ticket (e.g., status, priority, assignee)
   - `tags` (array[string], optional)
   - `custom_fields` (array[object], optional)
   - `due_at` (string, optional): ISO8601 datetime
+
+### search_tickets
+
+Search for tickets with filters
+
+- Input:
+  - `organization_name` (string, optional): Filter by organization name
+  - `created_after` (string, optional): Filter tickets created after date (YYYY-MM-DD)
+  - `created_before` (string, optional): Filter tickets created before date (YYYY-MM-DD)
+  - `status` (string, optional): Filter by status
+  - `page` (integer, optional): Page number (defaults to 1)
+  - `per_page` (integer, optional): Results per page, max 100 (defaults to 25)
+  - Plus any configured custom fields (see [Custom Fields Guide](docs/VIEWS_AND_CUSTOM_FIELDS.md))
+
+### list_views
+
+List all available Zendesk views
+
+### get_view_tickets
+
+Get tickets from a Zendesk view
+
+- Input:
+  - `view` (integer or string): View ID or view name (case-insensitive)
+  - `status` (string, optional): Filter by status (new, open, pending, on-hold, solved, closed)
+  - `page` (integer, optional): Page number (defaults to 1)
+  - `per_page` (integer, optional): Results per page, max 100 (defaults to 25)
+
+### search_organizations
+
+Search for organizations by name
+
+- Input:
+  - `name` (string): Organization name to search for
+
+### get_organization
+
+Get organization details by ID
+
+- Input:
+  - `organization_id` (integer): The organization ID
+
+### clear_organization_cache
+
+Clear the cached organization list (use when organizations have changed)
+
+### clear_views_cache
+
+Clear the cached views list (use when views have changed)
+
+## Documentation
+
+- [Architecture Documentation](ARCHITECTURE.md) - Technical details of the codebase
+- [Views and Custom Fields Guide](docs/VIEWS_AND_CUSTOM_FIELDS.md) - How to use views and configure custom field search

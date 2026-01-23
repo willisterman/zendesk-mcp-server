@@ -357,12 +357,93 @@ class ZendeskClient:
         except Exception as e:
             raise Exception(f"Failed to get all organizations: {str(e)}")
 
+    def get_views(self) -> List[Dict[str, Any]]:
+        """
+        Get all active views using Zenpy.
+
+        Returns:
+            List of view dicts with id, title, description, active
+        """
+        try:
+            views = self.client.views.active()
+            return [{
+                'id': view.id,
+                'title': view.title,
+                'description': view.description,
+                'active': view.active
+            } for view in views]
+        except Exception as e:
+            raise Exception(f"Failed to get views: {str(e)}")
+
+    def get_view_tickets(self, view_id: int, page: int = 1, per_page: int = 25) -> Dict[str, Any]:
+        """
+        Get tickets in a view using direct REST API for pagination control.
+
+        Args:
+            view_id: The ID of the view
+            page: Page number (1-based)
+            per_page: Number of tickets per page (max 100)
+
+        Returns:
+            Dict containing tickets and pagination info (same structure as get_tickets)
+        """
+        try:
+            per_page = min(per_page, 100)
+
+            params = {
+                'page': str(page),
+                'per_page': str(per_page)
+            }
+            query_string = urllib.parse.urlencode(params)
+            url = f"{self.base_url}/views/{view_id}/tickets.json?{query_string}"
+
+            req = urllib.request.Request(url)
+            req.add_header('Authorization', self.auth_header)
+            req.add_header('Content-Type', 'application/json')
+
+            with urllib.request.urlopen(req) as response:
+                data = json.loads(response.read().decode())
+
+            tickets_data = data.get('tickets', [])
+
+            ticket_list = []
+            for ticket in tickets_data:
+                ticket_list.append({
+                    'id': ticket.get('id'),
+                    'subject': ticket.get('subject'),
+                    'status': ticket.get('status'),
+                    'priority': ticket.get('priority'),
+                    'description': ticket.get('description'),
+                    'created_at': ticket.get('created_at'),
+                    'updated_at': ticket.get('updated_at'),
+                    'requester_id': ticket.get('requester_id'),
+                    'assignee_id': ticket.get('assignee_id'),
+                    'organization_id': ticket.get('organization_id')
+                })
+
+            return {
+                'tickets': ticket_list,
+                'view_id': view_id,
+                'page': page,
+                'per_page': per_page,
+                'count': len(ticket_list),
+                'has_more': data.get('next_page') is not None,
+                'next_page': page + 1 if data.get('next_page') else None,
+                'previous_page': page - 1 if data.get('previous_page') and page > 1 else None
+            }
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else "No response body"
+            raise Exception(f"Failed to get view tickets: HTTP {e.code} - {e.reason}. {error_body}")
+        except Exception as e:
+            raise Exception(f"Failed to get view tickets: {str(e)}")
+
     def _build_search_query(
         self,
         organization_name: str | None = None,
         created_after: str | None = None,
         created_before: str | None = None,
-        status: str | None = None
+        status: str | None = None,
+        custom_fields: Dict[int, str] | None = None
     ) -> str:
         """
         Build a Zendesk search query string.
@@ -372,6 +453,7 @@ class ZendeskClient:
             created_after: Filter tickets created after this date (YYYY-MM-DD)
             created_before: Filter tickets created before this date (YYYY-MM-DD)
             status: Filter by ticket status
+            custom_fields: Dict mapping field IDs to values for filtering
 
         Returns:
             Zendesk query string
@@ -385,6 +467,9 @@ class ZendeskClient:
             query_parts.append(f"created<{created_before}")
         if status:
             query_parts.append(f"status:{status}")
+        if custom_fields:
+            for field_id, value in custom_fields.items():
+                query_parts.append(f'custom_field_{field_id}:"{value}"')
         return " ".join(query_parts)
 
     def search_tickets(
@@ -393,6 +478,7 @@ class ZendeskClient:
         created_after: str | None = None,
         created_before: str | None = None,
         status: str | None = None,
+        custom_fields: Dict[int, str] | None = None,
         page: int = 1,
         per_page: int = 25
     ) -> Dict[str, Any]:
@@ -404,6 +490,7 @@ class ZendeskClient:
             created_after: Filter tickets created after this date (YYYY-MM-DD)
             created_before: Filter tickets created before this date (YYYY-MM-DD)
             status: Filter by ticket status (new, open, pending, on-hold, solved, closed)
+            custom_fields: Dict mapping field IDs to values for filtering
             page: Page number (1-based)
             per_page: Number of tickets per page (max 100)
 
@@ -416,7 +503,8 @@ class ZendeskClient:
                 organization_name=organization_name,
                 created_after=created_after,
                 created_before=created_before,
-                status=status
+                status=status,
+                custom_fields=custom_fields
             )
 
             # Zenpy search returns a generator, we need to handle pagination manually

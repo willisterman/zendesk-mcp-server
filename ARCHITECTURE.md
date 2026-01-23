@@ -25,7 +25,7 @@ A Model Context Protocol (MCP) server providing integration with Zendesk for tic
 
 ## MCP Capabilities
 
-### Tools (10 total)
+### Tools (13 total)
 
 | Tool | Required Params | Optional Params | Client Method |
 |------|-----------------|-----------------|---------------|
@@ -37,8 +37,11 @@ A Model Context Protocol (MCP) server providing integration with Zendesk for tic
 | `update_ticket` | `ticket_id` | `subject`, `status`, `priority`, `type`, `assignee_id`, `requester_id`, `tags`, `custom_fields`, `due_at` | `update_ticket()` |
 | `search_organizations` | `name` | - | `search_organizations()` |
 | `get_organization` | `organization_id` (int) | - | `get_organization()` |
-| `search_tickets` | - | `organization_name`, `created_after`, `created_before`, `status`, `page`, `per_page` | `search_tickets()` |
+| `search_tickets` | - | `organization_name`, `created_after`, `created_before`, `status`, `page`, `per_page`, + custom fields | `search_tickets()` |
+| `list_views` | - | - | `get_cached_views()` |
+| `get_view_tickets` | `view` (int or string) | `status`, `page`, `per_page` | `get_view_tickets()` |
 | `clear_organization_cache` | - | - | `clear_organization_cache()` |
+| `clear_views_cache` | - | - | `clear_views_cache()` |
 
 ### Prompts (2 total)
 
@@ -47,12 +50,13 @@ A Model Context Protocol (MCP) server providing integration with Zendesk for tic
 | `analyze-ticket` | `ticket_id` | `TICKET_ANALYSIS_TEMPLATE` | Analyze ticket for insights (summary, status, timeline) |
 | `draft-ticket-response` | `ticket_id` | `COMMENT_DRAFT_TEMPLATE` | Draft professional response (acknowledge, address, next steps) |
 
-### Resources (2 total)
+### Resources (3 total)
 
 | URI | Name | Caching | Response Format |
 |-----|------|---------|-----------------|
 | `zendesk://knowledge-base` | Zendesk Knowledge Base | TTL 1 hour | JSON with sections, articles, metadata |
 | `zendesk://organizations` | Zendesk Organizations | TTL 3 days | JSON with organizations list, count metadata |
+| `zendesk://views` | Zendesk Views | TTL 3 days | JSON with views list, count metadata |
 
 ---
 
@@ -208,6 +212,7 @@ Searches tickets with filters via Zenpy search API.
 - `created_after` - Filter tickets created after date (YYYY-MM-DD)
 - `created_before` - Filter tickets created before date (YYYY-MM-DD)
 - `status` - Filter by status (new, open, pending, on-hold, solved, closed)
+- `custom_fields` - Dict mapping field IDs to values for filtering
 - `page` - Page number (1-based)
 - `per_page` - Max 100
 
@@ -220,6 +225,41 @@ Searches tickets with filters via Zenpy search API.
     'count': int,           # Count on current page
     'total_count': int,     # Total matching tickets
     'query': str,           # The Zendesk query used
+    'has_more': bool,
+    'next_page': int | None,
+    'previous_page': int | None
+}
+```
+
+#### get_views() -> List[Dict[str, Any]]
+Retrieves all active views via Zenpy.
+
+**Returns:** List of:
+```python
+{
+    'id': int,
+    'title': str,
+    'description': str | None,
+    'active': bool
+}
+```
+
+#### get_view_tickets(view_id: int, page=1, per_page=25) -> Dict[str, Any]
+Fetches tickets in a view via **direct REST API**.
+
+**Parameters:**
+- `view_id` - The view ID
+- `page` - 1-based page number
+- `per_page` - Max 100
+
+**Returns:**
+```python
+{
+    'tickets': [...],       # List of ticket dicts
+    'view_id': int,
+    'page': int,
+    'per_page': int,
+    'count': int,
     'has_more': bool,
     'next_page': int | None,
     'previous_page': int | None
@@ -287,6 +327,39 @@ def clear_organization_cache():
     return True
 ```
 
+**Views Cache (3 day TTL with manual clear):**
+```python
+VIEWS_CACHE_TTL = 259200  # 3 days
+_views_cache: TTLCache = TTLCache(maxsize=1, ttl=VIEWS_CACHE_TTL)
+_VIEWS_CACHE_KEY = "all_views"
+
+def get_cached_views():
+    if _VIEWS_CACHE_KEY not in _views_cache:
+        _views_cache[_VIEWS_CACHE_KEY] = zendesk_client.get_views()
+    return _views_cache[_VIEWS_CACHE_KEY]
+
+def clear_views_cache():
+    _views_cache.clear()
+    return True
+```
+
+### Custom Field Configuration
+
+Custom fields can be mapped to friendly names for use in `search_tickets`:
+
+```python
+# Environment variable format (JSON object):
+ZENDESK_CUSTOM_FIELDS={"support_team_member": 12345678, "product": 87654321}
+
+# Loading in server.py:
+_custom_field_config: Dict[str, int] = {}
+_custom_fields_env = os.getenv("ZENDESK_CUSTOM_FIELDS")
+if _custom_fields_env:
+    _custom_field_config = json.loads(_custom_fields_env)
+```
+
+When configured, custom fields appear as additional parameters in the `search_tickets` tool schema and are translated to Zendesk query syntax (`custom_field_{id}:"value"`).
+
 ---
 
 ## Data Structures
@@ -338,12 +411,14 @@ Used for:
 - `get_organization()` - `self.client.organizations(id=...)`
 - `get_all_organizations()` - `self.client.organizations()` iterator
 - `search_tickets()` - `self.client.search(query, type='ticket')`
+- `get_views()` - `self.client.views.active()` iterator
 
 ### Direct REST API (Secondary)
 
 Used for:
 - `get_tickets()` - `GET /api/v2/tickets.json` (better pagination support)
 - `search_organizations()` - `GET /api/v2/organizations/search.json?name={name}`
+- `get_view_tickets()` - `GET /api/v2/views/{view_id}/tickets.json` (pagination support)
 
 Auth: Basic auth header
 Library: `urllib.request`
@@ -404,11 +479,12 @@ logger = logging.getLogger("zendesk-mcp-server")
 
 ### Environment Variables
 
-| Variable | Purpose |
-|----------|---------|
-| `ZENDESK_SUBDOMAIN` | Zendesk account subdomain |
-| `ZENDESK_EMAIL` | Zendesk account email |
-| `ZENDESK_API_KEY` | Zendesk API token |
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `ZENDESK_SUBDOMAIN` | Yes | Zendesk account subdomain |
+| `ZENDESK_EMAIL` | Yes | Zendesk account email |
+| `ZENDESK_API_KEY` | Yes | Zendesk API token |
+| `ZENDESK_CUSTOM_FIELDS` | No | JSON mapping of friendly names to custom field IDs for search |
 
 ### Loading
 
@@ -494,3 +570,13 @@ docker run --rm -i --env-file .env zendesk-mcp-server
 - **Search API limit**: Zendesk Search API returns max 1000 results per query
 - **Organization cache**: Cached for 3 days; use `clear_organization_cache` tool to refresh if organizations are added/removed
 - **Date format**: Date filters must use YYYY-MM-DD format (e.g., "2024-01-15")
+
+### Views
+
+- **Views cache**: Cached for 3 days; use `clear_views_cache` tool to refresh if views are added/modified
+- **View ticket counts**: May differ from actual tickets due to permissions
+
+### Custom Fields
+
+- **Configuration reload**: Custom field config requires server restart to pick up changes
+- **Exact match**: Custom field search uses exact match (Zendesk search limitation)
