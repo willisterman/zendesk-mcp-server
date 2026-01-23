@@ -648,11 +648,42 @@ async def handle_call_tool(
             )]
 
         elif name == "get_server_config":
+            # Determine source of environment variables
+            env_file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
+            env_file_vars = set()
+            if os.path.exists(env_file_path):
+                with open(env_file_path, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            var_name = line.split("=")[0].strip()
+                            env_file_vars.add(var_name)
+
+            def get_var_source(var_name):
+                if var_name in env_file_vars:
+                    return "from .env file"
+                elif os.getenv(var_name):
+                    return "from environment variable"
+                return "not set"
+
             config = {
-                "zendesk_subdomain": os.getenv("ZENDESK_SUBDOMAIN"),
-                "zendesk_email": os.getenv("ZENDESK_EMAIL"),
+                "server_path": os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                "env_file_path": env_file_path if os.path.exists(env_file_path) else "not found",
+                "zendesk_subdomain": {
+                    "value": os.getenv("ZENDESK_SUBDOMAIN"),
+                    "source": get_var_source("ZENDESK_SUBDOMAIN")
+                },
+                "zendesk_email": {
+                    "value": os.getenv("ZENDESK_EMAIL"),
+                    "source": get_var_source("ZENDESK_EMAIL")
+                },
+                "zendesk_api_key": {
+                    "value": "***" if os.getenv("ZENDESK_API_KEY") else None,
+                    "source": get_var_source("ZENDESK_API_KEY")
+                },
                 "zendesk_url": f"https://{os.getenv('ZENDESK_SUBDOMAIN')}.zendesk.com",
-                "custom_fields_configured": list(_custom_field_config.keys()) if _custom_field_config else []
+                "custom_fields_configured": list(_custom_field_config.keys()) if _custom_field_config else [],
+                "custom_fields_source": get_var_source("ZENDESK_CUSTOM_FIELDS")
             }
             return [types.TextContent(
                 type="text",

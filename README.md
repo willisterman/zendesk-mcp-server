@@ -292,7 +292,7 @@ Clear the cached views list (use when views have changed)
 
 Get the current MCP server configuration
 
-- Output: Returns subdomain, email, Zendesk URL, and configured custom field names (does not expose API key)
+- Output: Returns server path, subdomain, email, Zendesk URL, configured custom field names, and the source of each configuration value (.env file vs environment variable). API key is masked for security.
 
 ## Documentation
 
