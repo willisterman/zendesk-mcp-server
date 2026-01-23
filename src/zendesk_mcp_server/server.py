@@ -172,6 +172,15 @@ async def handle_get_prompt(name: str, arguments: Dict[str, str] | None) -> type
         raise
 
 
+def _build_search_tickets_description() -> str:
+    """Build the search_tickets tool description, including any configured custom fields."""
+    base_desc = "Search for tickets with filters (organization, date range, status)."
+    if _custom_field_config:
+        field_names = ", ".join(_custom_field_config.keys())
+        return f"{base_desc} Custom field filters available: {field_names}."
+    return base_desc
+
+
 def _build_search_tickets_schema() -> dict:
     """Build the search_tickets tool schema, including any configured custom fields."""
     properties = {
@@ -370,7 +379,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="search_tickets",
-            description="Search for tickets with filters (organization, date range, status, custom fields). Use this to find tickets for a specific organization or time period.",
+            description=_build_search_tickets_description(),
             inputSchema=_build_search_tickets_schema()
         ),
         types.Tool(
@@ -422,6 +431,15 @@ async def handle_list_tools() -> list[types.Tool]:
         types.Tool(
             name="clear_views_cache",
             description="Clear the cached views list. Use this if views have been added/modified and you need fresh data.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        types.Tool(
+            name="get_server_config",
+            description="Get the current MCP server configuration including Zendesk subdomain and email. Useful for verifying which Zendesk instance is connected.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -627,6 +645,18 @@ async def handle_call_tool(
             return [types.TextContent(
                 type="text",
                 text=json.dumps({"message": "Organization cache cleared successfully"})
+            )]
+
+        elif name == "get_server_config":
+            config = {
+                "zendesk_subdomain": os.getenv("ZENDESK_SUBDOMAIN"),
+                "zendesk_email": os.getenv("ZENDESK_EMAIL"),
+                "zendesk_url": f"https://{os.getenv('ZENDESK_SUBDOMAIN')}.zendesk.com",
+                "custom_fields_configured": list(_custom_field_config.keys()) if _custom_field_config else []
+            }
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(config, indent=2)
             )]
 
         else:

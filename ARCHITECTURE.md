@@ -25,7 +25,7 @@ A Model Context Protocol (MCP) server providing integration with Zendesk for tic
 
 ## MCP Capabilities
 
-### Tools (13 total)
+### Tools (14 total)
 
 | Tool | Required Params | Optional Params | Client Method |
 |------|-----------------|-----------------|---------------|
@@ -42,6 +42,7 @@ A Model Context Protocol (MCP) server providing integration with Zendesk for tic
 | `get_view_tickets` | `view` (int or string) | `status`, `page`, `per_page` | `get_view_tickets()` |
 | `clear_organization_cache` | - | - | `clear_organization_cache()` |
 | `clear_views_cache` | - | - | `clear_views_cache()` |
+| `get_server_config` | - | - | Returns env config |
 
 ### Prompts (2 total)
 

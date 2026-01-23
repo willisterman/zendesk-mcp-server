@@ -150,6 +150,20 @@ Get pending tickets where region is "EMEA" and customer_tier is "Premium"
 
 ## Troubleshooting
 
+### Verify server configuration
+
+If something seems wrong, verify which Zendesk instance the server is connected to:
+
+```
+What Zendesk instance am I connected to?
+```
+
+```
+Show me the server configuration
+```
+
+This will display the subdomain, email, and configured custom fields.
+
 ### View not found
 
 If you get "View not found" errors:
@@ -160,11 +174,29 @@ If you get "View not found" errors:
 
 ### Custom field not working
 
-If custom field searches return no results:
-1. Verify the field ID is correct in Zendesk Admin
-2. Check your `.env` file JSON syntax is valid
-3. Restart the MCP server after configuration changes
-4. Ensure the field value matches exactly (custom field search uses exact match)
+If custom field searches aren't being used or return no results:
+
+1. **Verify `.env` configuration** - Check the JSON syntax is valid:
+   ```env
+   ZENDESK_CUSTOM_FIELDS={"root_cause": 4416459398801, "product": 12345678}
+   ```
+
+2. **Restart Claude Desktop** - The MCP server only reads configuration at startup
+
+3. **Verify the field is loaded** - Ask Claude:
+   ```
+   Show me the server configuration
+   ```
+   The response should list your custom field in `custom_fields_configured`
+
+4. **Use the exact field name** - If your field is configured as `root_cause`, use that exact name in your query:
+   ```
+   Find tickets with root_cause "training issue"
+   ```
+
+5. **Check the field ID** - Verify the ID is correct in Zendesk Admin > Objects and rules > Tickets > Fields
+
+6. **Exact match only** - Custom field search uses exact match (Zendesk limitation)
 
 ### Stale data
 
