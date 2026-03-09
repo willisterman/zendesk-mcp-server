@@ -230,8 +230,11 @@ class ZendeskClient:
                     tokens.append(upload.token)
 
             ticket = self.client.tickets(id=ticket_id)
+            # Convert plain-text newlines to HTML line breaks so they render
+            # in Zendesk's html_body field (HTML ignores bare \n characters).
+            html_comment = comment.replace('\n', '<br>\n')
             ticket.comment = Comment(
-                html_body=comment,
+                html_body=html_comment,
                 public=public,
                 uploads=tokens if tokens else None
             )
