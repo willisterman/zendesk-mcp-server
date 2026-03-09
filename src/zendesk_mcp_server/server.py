@@ -189,6 +189,40 @@ async def handle_list_tools() -> list[types.Tool]:
             }
         ),
         types.Tool(
+            name="search_tickets",
+            description="Search Zendesk tickets using query syntax. Supports filters like status:open, priority:urgent, subject:\"text\", tags:tag_name, assignee:name, created>2024-01-01, and free-text search.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Zendesk search query. Examples: 'status:open reporting', 'status:open priority:urgent', 'subject:\"dashboard\" status:open', 'tags:bug created>2024-01-01'"
+                    },
+                    "page": {
+                        "type": "integer",
+                        "description": "Page number",
+                        "default": 1
+                    },
+                    "per_page": {
+                        "type": "integer",
+                        "description": "Results per page (max 100)",
+                        "default": 25
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "description": "Field to sort by (updated_at, created_at, priority, status, ticket_type)",
+                        "default": "updated_at"
+                    },
+                    "sort_order": {
+                        "type": "string",
+                        "description": "Sort order (asc or desc)",
+                        "default": "desc"
+                    }
+                },
+                "required": ["query"]
+            }
+        ),
+        types.Tool(
             name="get_ticket_comments",
             description="Retrieve all comments for a Zendesk ticket by its ID",
             inputSchema={
@@ -203,8 +237,31 @@ async def handle_list_tools() -> list[types.Tool]:
             }
         ),
         types.Tool(
-            name="create_ticket_comment",
-            description="Create a new comment on an existing Zendesk ticket",
+            name="create_internal_note",
+            description="Add a private/internal note to a Zendesk ticket (not visible to the customer). Supports file attachments.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ticket_id": {
+                        "type": "integer",
+                        "description": "The ID of the ticket to add an internal note to"
+                    },
+                    "comment": {
+                        "type": "string",
+                        "description": "The internal note text/content"
+                    },
+                    "file_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of absolute file paths to attach"
+                    }
+                },
+                "required": ["ticket_id", "comment"]
+            }
+        ),
+        types.Tool(
+            name="create_public_comment",
+            description="Post a PUBLIC comment on a Zendesk ticket that IS VISIBLE TO THE CUSTOMER. Use create_internal_note for private notes instead. Supports file attachments.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -214,12 +271,12 @@ async def handle_list_tools() -> list[types.Tool]:
                     },
                     "comment": {
                         "type": "string",
-                        "description": "The comment text/content to add"
+                        "description": "The public comment text/content (visible to customer)"
                     },
-                    "public": {
-                        "type": "boolean",
-                        "description": "Whether the comment should be public",
-                        "default": True
+                    "file_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of absolute file paths to attach"
                     }
                 },
                 "required": ["ticket_id", "comment"]
@@ -299,6 +356,21 @@ async def handle_call_tool(
                 text=json.dumps(tickets, indent=2)
             )]
 
+        elif name == "search_tickets":
+            if not arguments or "query" not in arguments:
+                raise ValueError("Missing required argument: query")
+            results = zendesk_client.search_tickets(
+                query=arguments["query"],
+                page=arguments.get("page", 1),
+                per_page=arguments.get("per_page", 25),
+                sort_by=arguments.get("sort_by", "updated_at"),
+                sort_order=arguments.get("sort_order", "desc"),
+            )
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(results, indent=2)
+            )]
+
         elif name == "get_ticket_comments":
             if not arguments:
                 raise ValueError("Missing arguments")
@@ -309,18 +381,40 @@ async def handle_call_tool(
                 text=json.dumps(comments)
             )]
 
-        elif name == "create_ticket_comment":
+        elif name == "create_internal_note":
             if not arguments:
                 raise ValueError("Missing arguments")
-            public = arguments.get("public", True)
             result = zendesk_client.post_comment(
                 ticket_id=arguments["ticket_id"],
                 comment=arguments["comment"],
-                public=public
+                public=False,
+                file_paths=arguments.get("file_paths")
             )
+            attachments = arguments.get("file_paths", [])
+            msg = "Internal note added successfully"
+            if attachments:
+                msg += f" with {len(attachments)} attachment(s)"
             return [types.TextContent(
                 type="text",
-                text=f"Comment created successfully: {result}"
+                text=msg
+            )]
+
+        elif name == "create_public_comment":
+            if not arguments:
+                raise ValueError("Missing arguments")
+            result = zendesk_client.post_comment(
+                ticket_id=arguments["ticket_id"],
+                comment=arguments["comment"],
+                public=True,
+                file_paths=arguments.get("file_paths")
+            )
+            attachments = arguments.get("file_paths", [])
+            msg = "Public comment posted successfully"
+            if attachments:
+                msg += f" with {len(attachments)} attachment(s)"
+            return [types.TextContent(
+                type="text",
+                text=msg
             )]
 
         elif name == "update_ticket":

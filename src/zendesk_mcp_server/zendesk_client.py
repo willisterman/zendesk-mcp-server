@@ -30,24 +30,83 @@ class ZendeskClient:
         encoded_credentials = base64.b64encode(credentials.encode()).decode('ascii')
         self.auth_header = f"Basic {encoded_credentials}"
 
+        # Cached ticket field definitions: {field_id: field_title}
+        self._ticket_fields_cache: Dict[int, str] | None = None
+
+    def _get_ticket_fields(self) -> Dict[int, str]:
+        """
+        Fetch and cache all ticket field definitions. Called once per server lifetime.
+        """
+        if self._ticket_fields_cache is not None:
+            return self._ticket_fields_cache
+
+        fields = {}
+        url = f"{self.base_url}/ticket_fields.json?page=1&per_page=100"
+        while url:
+            req = urllib.request.Request(url)
+            req.add_header('Authorization', self.auth_header)
+            req.add_header('Content-Type', 'application/json')
+            with urllib.request.urlopen(req) as response:
+                data = json.loads(response.read().decode())
+            for field in data.get('ticket_fields', []):
+                fields[field['id']] = field.get('title', field.get('raw_title', str(field['id'])))
+            url = data.get('next_page')
+
+        self._ticket_fields_cache = fields
+        return fields
+
+    def _resolve_custom_fields(self, custom_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Enrich custom fields with their cached display names.
+        Only includes fields that have a non-empty value.
+        """
+        field_names = self._get_ticket_fields()
+        resolved = []
+        for cf in custom_fields:
+            value = cf.get('value')
+            if value is not None and value != '':
+                field_id = cf.get('id')
+                resolved.append({
+                    'id': field_id,
+                    'name': field_names.get(field_id, str(field_id)),
+                    'value': value
+                })
+        return resolved
+
     def get_ticket(self, ticket_id: int) -> Dict[str, Any]:
         """
-        Query a ticket by its ID
+        Query a ticket by its ID using the direct API to get full data including custom fields.
         """
         try:
-            ticket = self.client.tickets(id=ticket_id)
+            url = f"{self.base_url}/tickets/{ticket_id}.json"
+            req = urllib.request.Request(url)
+            req.add_header('Authorization', self.auth_header)
+            req.add_header('Content-Type', 'application/json')
+
+            with urllib.request.urlopen(req) as response:
+                data = json.loads(response.read().decode())
+
+            ticket = data.get('ticket', {})
+
+            custom_fields = self._resolve_custom_fields(ticket.get('custom_fields', []))
+
             return {
-                'id': ticket.id,
-                'subject': ticket.subject,
-                'description': ticket.description,
-                'status': ticket.status,
-                'priority': ticket.priority,
-                'created_at': str(ticket.created_at),
-                'updated_at': str(ticket.updated_at),
-                'requester_id': ticket.requester_id,
-                'assignee_id': ticket.assignee_id,
-                'organization_id': ticket.organization_id
+                'id': ticket.get('id'),
+                'subject': ticket.get('subject'),
+                'description': ticket.get('description'),
+                'status': ticket.get('status'),
+                'priority': ticket.get('priority'),
+                'created_at': ticket.get('created_at'),
+                'updated_at': ticket.get('updated_at'),
+                'requester_id': ticket.get('requester_id'),
+                'assignee_id': ticket.get('assignee_id'),
+                'organization_id': ticket.get('organization_id'),
+                'tags': ticket.get('tags', []),
+                'custom_fields': custom_fields
             }
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else "No response body"
+            raise Exception(f"Failed to get ticket {ticket_id}: HTTP {e.code} - {e.reason}. {error_body}")
         except Exception as e:
             raise Exception(f"Failed to get ticket {ticket_id}: {str(e)}")
 
@@ -68,15 +127,23 @@ class ZendeskClient:
         except Exception as e:
             raise Exception(f"Failed to get comments for ticket {ticket_id}: {str(e)}")
 
-    def post_comment(self, ticket_id: int, comment: str, public: bool = True) -> str:
+    def post_comment(self, ticket_id: int, comment: str, public: bool = True,
+                     file_paths: list[str] | None = None) -> str:
         """
-        Post a comment to an existing ticket.
+        Post a comment to an existing ticket, optionally with file attachments.
         """
         try:
+            tokens = []
+            if file_paths:
+                for path in file_paths:
+                    upload = self.client.attachments.upload(path)
+                    tokens.append(upload.token)
+
             ticket = self.client.tickets(id=ticket_id)
             ticket.comment = Comment(
                 html_body=comment,
-                public=public
+                public=public,
+                uploads=tokens if tokens else None
             )
             self.client.tickets.update(ticket)
             return comment
@@ -152,6 +219,80 @@ class ZendeskClient:
             raise Exception(f"Failed to get latest tickets: HTTP {e.code} - {e.reason}. {error_body}")
         except Exception as e:
             raise Exception(f"Failed to get latest tickets: {str(e)}")
+
+    def search_tickets(self, query: str, page: int = 1, per_page: int = 25, sort_by: str = 'updated_at', sort_order: str = 'desc') -> Dict[str, Any]:
+        """
+        Search tickets using the Zendesk Search API.
+
+        Args:
+            query: Zendesk search query string. Supports operators like:
+                   status:open, priority:urgent, subject:"some text",
+                   assignee:name, tags:tag_name, created>2024-01-01, etc.
+                   The query automatically scopes to type:ticket.
+            page: Page number (1-based)
+            per_page: Results per page (max 100)
+            sort_by: Field to sort by (updated_at, created_at, priority, status, ticket_type)
+            sort_order: Sort order (asc or desc)
+
+        Returns:
+            Dict containing matching tickets and pagination info
+        """
+        try:
+            per_page = min(per_page, 100)
+
+            # Ensure the query is scoped to tickets
+            full_query = query if 'type:ticket' in query else f'type:ticket {query}'
+
+            params = {
+                'query': full_query,
+                'page': str(page),
+                'per_page': str(per_page),
+                'sort_by': sort_by,
+                'sort_order': sort_order
+            }
+            query_string = urllib.parse.urlencode(params)
+            url = f"{self.base_url}/search.json?{query_string}"
+
+            req = urllib.request.Request(url)
+            req.add_header('Authorization', self.auth_header)
+            req.add_header('Content-Type', 'application/json')
+
+            with urllib.request.urlopen(req) as response:
+                data = json.loads(response.read().decode())
+
+            results = data.get('results', [])
+            ticket_list = []
+            for ticket in results:
+                ticket_list.append({
+                    'id': ticket.get('id'),
+                    'subject': ticket.get('subject'),
+                    'status': ticket.get('status'),
+                    'priority': ticket.get('priority'),
+                    'description': ticket.get('description'),
+                    'created_at': ticket.get('created_at'),
+                    'updated_at': ticket.get('updated_at'),
+                    'requester_id': ticket.get('requester_id'),
+                    'assignee_id': ticket.get('assignee_id'),
+                    'tags': ticket.get('tags', []),
+                })
+
+            return {
+                'tickets': ticket_list,
+                'total_count': data.get('count', len(ticket_list)),
+                'page': page,
+                'per_page': per_page,
+                'query': full_query,
+                'sort_by': sort_by,
+                'sort_order': sort_order,
+                'has_more': data.get('next_page') is not None,
+                'next_page': page + 1 if data.get('next_page') else None,
+                'previous_page': page - 1 if data.get('previous_page') and page > 1 else None
+            }
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else "No response body"
+            raise Exception(f"Failed to search tickets: HTTP {e.code} - {e.reason}. {error_body}")
+        except Exception as e:
+            raise Exception(f"Failed to search tickets: {str(e)}")
 
     def get_all_articles(self) -> Dict[str, Any]:
         """
