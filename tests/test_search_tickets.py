@@ -168,8 +168,8 @@ class TestQueryBuilding:
     def test_date_filters(self):
         client = self._make_client()
         q = self._capture_query(client, created_after="2024-01-01", created_before="2024-12-31")
-        assert "created>2024-01-01" in q
-        assert "created<2024-12-31" in q
+        assert "created>=2024-01-01" in q
+        assert "created<=2024-12-31" in q
 
     def test_org_name_with_spaces_is_quoted(self):
         client = self._make_client()

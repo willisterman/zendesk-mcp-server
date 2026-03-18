@@ -357,9 +357,9 @@ class ZendeskClient:
             if organization_name:
                 query_parts.append(f'organization:"{organization_name}"')
             if created_after:
-                query_parts.append(f"created>{created_after}")
+                query_parts.append(f"created>={created_after}")
             if created_before:
-                query_parts.append(f"created<{created_before}")
+                query_parts.append(f"created<={created_before}")
             if status:
                 query_parts.append(f"status:{status}")
             if custom_fields:
