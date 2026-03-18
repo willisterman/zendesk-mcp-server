@@ -174,7 +174,13 @@ async def handle_get_prompt(name: str, arguments: Dict[str, str] | None) -> type
 
 def _build_search_tickets_description() -> str:
     """Build the search_tickets tool description, including any configured custom fields."""
-    base_desc = "Search for tickets with filters (organization, date range, status)."
+    base_desc = (
+        "Search Zendesk tickets using a raw query string, structured filters, or both. "
+        "Raw query supports Zendesk syntax: status:open, priority:urgent, subject:\"text\", "
+        "tags:tag_name, assignee:name, created>2024-01-01, and free-text search. "
+        "Structured filters (organization_name, date range, status) can be used alone or "
+        "combined with a raw query."
+    )
     if _custom_field_config:
         field_names = ", ".join(_custom_field_config.keys())
         return f"{base_desc} Custom field filters available: {field_names}."
@@ -182,8 +188,12 @@ def _build_search_tickets_description() -> str:
 
 
 def _build_search_tickets_schema() -> dict:
-    """Build the search_tickets tool schema, including any configured custom fields."""
+    """Build the search_tickets tool schema, including both raw query and structured params."""
     properties = {
+        "query": {
+            "type": "string",
+            "description": "Raw Zendesk search query. Examples: 'status:open reporting', 'priority:urgent', 'subject:\"dashboard\"'. Can be combined with structured filters below."
+        },
         "organization_name": {
             "type": "string",
             "description": "Filter by organization name (exact match)"
@@ -207,8 +217,18 @@ def _build_search_tickets_schema() -> dict:
         },
         "per_page": {
             "type": "integer",
-            "description": "Number of tickets per page (max 100)",
+            "description": "Results per page (max 100)",
             "default": 25
+        },
+        "sort_by": {
+            "type": "string",
+            "description": "Field to sort by (updated_at, created_at, priority, status, ticket_type)",
+            "default": "updated_at"
+        },
+        "sort_order": {
+            "type": "string",
+            "description": "Sort order (asc or desc)",
+            "default": "desc"
         }
     }
 
@@ -294,37 +314,8 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="search_tickets",
-            description="Search Zendesk tickets using query syntax. Supports filters like status:open, priority:urgent, subject:\"text\", tags:tag_name, assignee:name, created>2024-01-01, and free-text search.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Zendesk search query. Examples: 'status:open reporting', 'status:open priority:urgent', 'subject:\"dashboard\" status:open', 'tags:bug created>2024-01-01'"
-                    },
-                    "page": {
-                        "type": "integer",
-                        "description": "Page number",
-                        "default": 1
-                    },
-                    "per_page": {
-                        "type": "integer",
-                        "description": "Results per page (max 100)",
-                        "default": 25
-                    },
-                    "sort_by": {
-                        "type": "string",
-                        "description": "Field to sort by (updated_at, created_at, priority, status, ticket_type)",
-                        "default": "updated_at"
-                    },
-                    "sort_order": {
-                        "type": "string",
-                        "description": "Sort order (asc or desc)",
-                        "default": "desc"
-                    }
-                },
-                "required": ["query"]
-            }
+            description=_build_search_tickets_description(),
+            inputSchema=_build_search_tickets_schema()
         ),
         types.Tool(
             name="get_ticket_comments",
@@ -449,11 +440,6 @@ async def handle_list_tools() -> list[types.Tool]:
             }
         ),
         types.Tool(
-            name="search_tickets",
-            description=_build_search_tickets_description(),
-            inputSchema=_build_search_tickets_schema()
-        ),
-        types.Tool(
             name="list_views",
             description="List all available Zendesk views",
             inputSchema={
@@ -572,10 +558,22 @@ async def handle_call_tool(
             )]
 
         elif name == "search_tickets":
-            if not arguments or "query" not in arguments:
-                raise ValueError("Missing required argument: query")
+            if not arguments:
+                arguments = {}
+
+            # Extract custom field values and map friendly names to IDs
+            custom_fields = {}
+            for field_name, field_id in _custom_field_config.items():
+                if field_name in arguments:
+                    custom_fields[field_id] = arguments[field_name]
+
             results = zendesk_client.search_tickets(
-                query=arguments["query"],
+                query=arguments.get("query"),
+                organization_name=arguments.get("organization_name"),
+                created_after=arguments.get("created_after"),
+                created_before=arguments.get("created_before"),
+                status=arguments.get("status"),
+                custom_fields=custom_fields if custom_fields else None,
                 page=arguments.get("page", 1),
                 per_page=arguments.get("per_page", 25),
                 sort_by=arguments.get("sort_by", "updated_at"),
@@ -681,34 +679,6 @@ async def handle_call_tool(
             return [types.TextContent(
                 type="text",
                 text=json.dumps(organization, indent=2)
-            )]
-
-        elif name == "search_tickets":
-            organization_name = arguments.get("organization_name") if arguments else None
-            created_after = arguments.get("created_after") if arguments else None
-            created_before = arguments.get("created_before") if arguments else None
-            status = arguments.get("status") if arguments else None
-            page = arguments.get("page", 1) if arguments else 1
-            per_page = arguments.get("per_page", 25) if arguments else 25
-
-            # Extract custom field values and map to IDs
-            custom_fields = {}
-            for field_name, field_id in _custom_field_config.items():
-                if arguments and field_name in arguments:
-                    custom_fields[field_id] = arguments[field_name]
-
-            tickets = zendesk_client.search_tickets(
-                organization_name=organization_name,
-                created_after=created_after,
-                created_before=created_before,
-                status=status,
-                custom_fields=custom_fields if custom_fields else None,
-                page=page,
-                per_page=per_page
-            )
-            return [types.TextContent(
-                type="text",
-                text=json.dumps(tickets, indent=2)
             )]
 
         elif name == "list_views":

@@ -313,15 +313,32 @@ class ZendeskClient:
         except Exception as e:
             raise Exception(f"Failed to get latest tickets: {str(e)}")
 
-    def search_tickets(self, query: str, page: int = 1, per_page: int = 25, sort_by: str = 'updated_at', sort_order: str = 'desc') -> Dict[str, Any]:
+    def search_tickets(
+        self,
+        query: str | None = None,
+        organization_name: str | None = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
+        status: str | None = None,
+        custom_fields: Dict[int, str] | None = None,
+        page: int = 1,
+        per_page: int = 25,
+        sort_by: str = 'updated_at',
+        sort_order: str = 'desc',
+    ) -> Dict[str, Any]:
         """
-        Search tickets using the Zendesk Search API.
+        Search tickets using the Zendesk Search API (REST).
+
+        Accepts a raw query string, structured filter params, or both.
+        When both are provided, structured filters are appended to the raw query.
 
         Args:
-            query: Zendesk search query string. Supports operators like:
-                   status:open, priority:urgent, subject:"some text",
-                   assignee:name, tags:tag_name, created>2024-01-01, etc.
-                   The query automatically scopes to type:ticket.
+            query: Raw Zendesk search query (e.g. 'status:open reporting')
+            organization_name: Filter by organization name
+            created_after: Filter tickets created after this date (YYYY-MM-DD)
+            created_before: Filter tickets created before this date (YYYY-MM-DD)
+            status: Filter by ticket status (new, open, pending, on-hold, solved, closed)
+            custom_fields: Dict mapping field IDs to values for filtering
             page: Page number (1-based)
             per_page: Results per page (max 100)
             sort_by: Field to sort by (updated_at, created_at, priority, status, ticket_type)
@@ -333,8 +350,27 @@ class ZendeskClient:
         try:
             per_page = min(per_page, 100)
 
+            # Build query from raw string and/or structured params
+            query_parts: list[str] = []
+            if query:
+                query_parts.append(query)
+            if organization_name:
+                query_parts.append(f'organization:"{organization_name}"')
+            if created_after:
+                query_parts.append(f"created>{created_after}")
+            if created_before:
+                query_parts.append(f"created<{created_before}")
+            if status:
+                query_parts.append(f"status:{status}")
+            if custom_fields:
+                for field_id, value in custom_fields.items():
+                    query_parts.append(f'custom_field_{field_id}:"{value}"')
+
+            full_query = " ".join(query_parts) if query_parts else "type:ticket"
+
             # Ensure the query is scoped to tickets
-            full_query = query if 'type:ticket' in query else f'type:ticket {query}'
+            if 'type:ticket' not in full_query:
+                full_query = f'type:ticket {full_query}'
 
             params = {
                 'query': full_query,
@@ -671,113 +707,3 @@ class ZendeskClient:
         except Exception as e:
             raise Exception(f"Failed to get view tickets: {str(e)}")
 
-    def _build_search_query(
-        self,
-        organization_name: str | None = None,
-        created_after: str | None = None,
-        created_before: str | None = None,
-        status: str | None = None,
-        custom_fields: Dict[int, str] | None = None
-    ) -> str:
-        """
-        Build a Zendesk search query string.
-
-        Args:
-            organization_name: Filter by organization name
-            created_after: Filter tickets created after this date (YYYY-MM-DD)
-            created_before: Filter tickets created before this date (YYYY-MM-DD)
-            status: Filter by ticket status
-            custom_fields: Dict mapping field IDs to values for filtering
-
-        Returns:
-            Zendesk query string
-        """
-        query_parts = ["type:ticket"]
-        if organization_name:
-            query_parts.append(f'organization:"{organization_name}"')
-        if created_after:
-            query_parts.append(f"created>{created_after}")
-        if created_before:
-            query_parts.append(f"created<{created_before}")
-        if status:
-            query_parts.append(f"status:{status}")
-        if custom_fields:
-            for field_id, value in custom_fields.items():
-                query_parts.append(f'custom_field_{field_id}:"{value}"')
-        return " ".join(query_parts)
-
-    def search_tickets(
-        self,
-        organization_name: str | None = None,
-        created_after: str | None = None,
-        created_before: str | None = None,
-        status: str | None = None,
-        custom_fields: Dict[int, str] | None = None,
-        page: int = 1,
-        per_page: int = 25
-    ) -> Dict[str, Any]:
-        """
-        Search for tickets with various filters using Zenpy search.
-
-        Args:
-            organization_name: Filter by organization name
-            created_after: Filter tickets created after this date (YYYY-MM-DD)
-            created_before: Filter tickets created before this date (YYYY-MM-DD)
-            status: Filter by ticket status (new, open, pending, on-hold, solved, closed)
-            custom_fields: Dict mapping field IDs to values for filtering
-            page: Page number (1-based)
-            per_page: Number of tickets per page (max 100)
-
-        Returns:
-            Dict containing tickets and pagination info (same structure as get_tickets)
-        """
-        try:
-            per_page = min(per_page, 100)
-            query = self._build_search_query(
-                organization_name=organization_name,
-                created_after=created_after,
-                created_before=created_before,
-                status=status,
-                custom_fields=custom_fields
-            )
-
-            # Zenpy search returns a generator, we need to handle pagination manually
-            search_results = self.client.search(query, type='ticket')
-
-            # Convert to list and apply pagination
-            all_tickets = list(search_results)
-            total_count = len(all_tickets)
-
-            # Calculate pagination
-            start_idx = (page - 1) * per_page
-            end_idx = start_idx + per_page
-            page_tickets = all_tickets[start_idx:end_idx]
-
-            ticket_list = [{
-                'id': ticket.id,
-                'subject': ticket.subject,
-                'status': ticket.status,
-                'priority': ticket.priority,
-                'description': ticket.description,
-                'created_at': str(ticket.created_at),
-                'updated_at': str(ticket.updated_at),
-                'requester_id': ticket.requester_id,
-                'assignee_id': ticket.assignee_id,
-                'organization_id': ticket.organization_id
-            } for ticket in page_tickets]
-
-            has_more = end_idx < total_count
-
-            return {
-                'tickets': ticket_list,
-                'page': page,
-                'per_page': per_page,
-                'count': len(ticket_list),
-                'total_count': total_count,
-                'query': query,
-                'has_more': has_more,
-                'next_page': page + 1 if has_more else None,
-                'previous_page': page - 1 if page > 1 else None
-            }
-        except Exception as e:
-            raise Exception(f"Failed to search tickets: {str(e)}")
